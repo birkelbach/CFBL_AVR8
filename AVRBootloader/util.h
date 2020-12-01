@@ -22,9 +22,11 @@
 #ifndef __BL_UTIL_H
 #define __BL_UTIL_H
 
-//#define F_CPU 1000000UL
-//#define F_CPU 2000000UL
-#define F_CPU 8000000UL
+#ifndef F_CPU
+  //#define F_CPU 1000000UL
+  //#define F_CPU 2000000UL
+  #define F_CPU 8000000UL
+#endif
 
 /* CAN_CS should define the pin used for the chip select on the
    MCP2515 CAN Controller.  This is different than the SPI_SS pin

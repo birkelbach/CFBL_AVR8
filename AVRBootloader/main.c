@@ -187,13 +187,21 @@ store_crc(uint16_t crc, uint16_t length)
 #elif PGM_LENGTH_BITS == 32
 void
 store_crc(uint16_t crc, uint32_t length)
-{    
+{   
+#if PGM_LENGTH_BITS == 16 
     uint16_t n, i=0;
-    
+#elif PGM_LENGTH_BITS == 32
+    uint16_t i=0;
+    uint32_t n;
+#endif    
     /* Run through the page and store the information that is already there
        in the temporary buffer. */
     for(n=PGM_LAST_PAGE_START; n<(PGM_LAST_PAGE_START + PGM_PAGE_SIZE-4); n+=2) {
+#if PGM_LENGTH_BITS == 16
         i = pgm_read_word_near(n);
+#elif PGM_LENGTH_BITS == 32
+        i = pgm_read_word_far(n);
+#endif
         boot_page_fill(n, i);
     }
     /* Add the length and crc to the buffer and write it out. */
@@ -433,22 +441,33 @@ pgmcrc(uint16_t count) {
 #elif PGM_LENGTH_BITS == 32
 uint16_t
 pgmcrc(uint32_t count) {
-	uint16_t carry;
+	uint16_t crctable[256];
+	uint8_t temp;
 	uint16_t crc = 0xffff;
 	uint32_t addr = 0;
-
-	while(addr != count) {
-		int i = 8;
-
-		bload_check();
-
-		crc ^= pgm_read_byte_far(addr++);
-		while(i--)
-		{
-			carry = crc & 0x0001;
-			crc >>= 1;
-			if (carry) crc ^= 0xA001;
+	uint8_t i;
+	
+	/* Since we could be dealing with really large programs we are going
+	   to pre-calculate the CRC table and use it instead of all the bit shifting */
+	for(int n=0; n<256; n++) {
+		i = 8;
+		crctable[n] = n;
+		while(i--) {
+			if(crctable[n] & 0x01)
+			    crctable[n] = (crctable[n] >> 1) ^ 0xA001;
+			else
+			    crctable[n] = crctable[n] >> 1;
 		}
+	}
+		
+	while(addr != count) {
+		if(addr % 64 == 0)
+		    bload_check();
+
+		temp = pgm_read_byte_far(addr++) ^ crc;
+		crc >>=8;
+		crc ^= crctable[temp];
+
 	}
 	return crc;
 }
