@@ -25,8 +25,8 @@
 #define EE_BAUD       (const uint8_t *)0x02
 
 // Verification Code for Firmware Update
-#define BL_VERIFY_LSB    0x01
-#define BL_VERIFY_MSB    0xf7
+#define BL_VERIFY_LSB    0xB3
+#define BL_VERIFY_MSB    0x07
 
 // Comment this out to make all the UART debugging stuff go away.
 #define UART_DEBUG 0x01

@@ -188,29 +188,22 @@ store_crc(uint16_t crc, uint16_t length)
 void
 store_crc(uint16_t crc, uint32_t length)
 {   
-#if PGM_LENGTH_BITS == 16 
-    uint16_t n, i=0;
-#elif PGM_LENGTH_BITS == 32
     uint16_t i=0;
     uint32_t n;
-#endif    
     /* Run through the page and store the information that is already there
        in the temporary buffer. */
-    for(n=PGM_LAST_PAGE_START; n<(PGM_LAST_PAGE_START + PGM_PAGE_SIZE-4); n+=2) {
-#if PGM_LENGTH_BITS == 16
-        i = pgm_read_word_near(n);
-#elif PGM_LENGTH_BITS == 32
+    for(n=PGM_LAST_PAGE_START; n<(PGM_LAST_PAGE_START + PGM_PAGE_SIZE-6); n+=2) {
         i = pgm_read_word_far(n);
-#endif
-        boot_page_fill(n, i);
+        boot_page_fill_safe(n, i);
     }
     /* Add the length and crc to the buffer and write it out. */
-    boot_page_fill(PGM_LENGTH, length);
-    boot_page_fill(PGM_CRC, crc);
-    boot_page_erase(PGM_LAST_PAGE_START);
-    boot_spm_busy_wait(); 	
-    boot_page_write(PGM_LAST_PAGE_START);
-    boot_spm_busy_wait(); 
+    boot_page_fill_safe(PGM_LENGTH, (uint16_t)(length & 0x0000FFFF));
+	boot_page_fill_safe(PGM_LENGTH+2, (uint16_t)(length >> 16));
+    boot_page_fill_safe(PGM_CRC, crc);
+    boot_page_erase_safe(PGM_LAST_PAGE_START);
+    //boot_spm_busy_wait(); 	
+    boot_page_write_safe(PGM_LAST_PAGE_START);
+    //boot_spm_busy_wait(); 
 }
 #endif
 
@@ -270,7 +263,7 @@ load_firmware(uint8_t channel)
                 /* We may as well get the address here */
                 address = *(uint32_t *)(&frame.data[1]);
                 if(frame.data[0] == 0x01) { /* Fill Buffer */
-				    length = frame.data[6] | frame.data[5]<<8;
+				    length = frame.data[5] | frame.data[6]<<8;
 #ifdef UART_DEBUG
                     uart_write("FB ", 3);
                     itoa(address, sout, 10);
@@ -281,7 +274,7 @@ load_firmware(uint8_t channel)
 					uart_write("\n", 1);
 #endif
                 } else if(frame.data[0] == 0x02) { /* Page Erase */
-				    boot_page_erase(address);
+				    boot_page_erase_safe(address);
 #ifdef UART_DEBUG
                     uart_write("EP ", 3);
 					itoa(address, sout, 10);
@@ -290,7 +283,7 @@ load_firmware(uint8_t channel)
 #endif
 					address = 0xFFFFFFFF; /* So we don't try to read data */
                 } else if(frame.data[0] == 0x03) { /* Page Write */
-				    boot_page_write(address);
+				    boot_page_write_safe(address);
 #ifdef UART_DEBUG
                     uart_write("WP ", 3);
 					itoa(address, sout, 10);
@@ -306,7 +299,10 @@ load_firmware(uint8_t channel)
                 } else if(frame.data[0] == 0x05) { /* Complete */
 				    crc = *(uint16_t *)(&frame.data[1]);
                     temp = *(uint16_t *)(&frame.data[3]); /* Size */
-                    store_crc(crc, temp);
+                    frame.id++; /* Add one for the response channel */
+					can_send(0, 3, frame); /* Send Response */
+					store_crc(crc, temp);
+					
 #ifdef UART_DEBUG
 					uart_write("C\n", 2);
 #endif
@@ -322,7 +318,7 @@ load_firmware(uint8_t channel)
             if(result == 0) {
 			    for(n=0; n<frame.length; n+=2) {
 				    temp = *(uint16_t *)(&frame.data[n]);
-					boot_page_fill(address+offset+n, temp);
+					boot_page_fill_safe(address+offset+n, temp);
 				}
 				offset+=frame.length;
 #ifdef UART_DEBUG
@@ -330,20 +326,21 @@ load_firmware(uint8_t channel)
 #endif
                 /* The following is an ack for buffer load data
 				   I don't know that we really need it. */
-				//frame.id++;
-				//frame.data[0] = offset;
-				//frame.length = 1;
-				//can_send(0, 3, frame);
+				frame.id++;
+				frame.data[0] = offset;
+				frame.data[1] = (offset & 0xFF00) >>8;
+				frame.length = 2;
+				can_send(0, 3, frame);
 				if(offset >= length) {
-				    address = 0xFFFF; /* To get out of here */
+				    address = 0xFFFFFFFF; /* To get out of here */
 					offset = 0;
 #ifdef UART_DEBUG
-					uart_write("\n", 1);
+					uart_write("#\n", 2);
 #endif
                 }
 
 			} else if(result == 2) { /* This is a timeout */
-                address = 0xFFFF;
+                address = 0xFFFFFFFF;
 				offset = 0;
 #ifdef UART_DEBUG
 				uart_write("t\n", 2); /* TODO: Should send an abort */
@@ -403,8 +400,8 @@ bload_check(void) {
             /* Build success frame */
             frame.id = FIX_NODE_SPECIFIC + node_id;
             frame.length = 3;
-            frame.data[0] = send_node;
-            frame.data[1] = FIX_FIRMWARE;
+            frame.data[0] = FIX_FIRMWARE;
+            frame.data[1] = send_node;
             frame.data[2] = 0x00;
             can_send(0, 3, frame);
 			/* Jump to load firmware */
@@ -477,12 +474,15 @@ pgmcrc(uint32_t count) {
 int
 main(void)
 {
-#if PGM_LENGTH_BITS == 16
-    uint16_t pgm_crc, count, cmp_crc;
-#elif PGM_LENGTH_BITS == 32
-    uint32_t pgm_crc, count, cmp_crc;
-#endif
+	struct CanFrame frame;
+    uint16_t pgm_crc, cmp_crc;
 	uint8_t crcgood=0;
+	
+#if PGM_LENGTH_BITS == 16
+    uint16_t count;
+#elif PGM_LENGTH_BITS == 32
+    uint32_t count;
+#endif
 #ifdef UART_DEBUG
     char sout[8];    
 #endif
@@ -514,6 +514,9 @@ main(void)
     itoa(pgm_crc,sout,16);
 	uart_write("Checksum ", 9);
 	uart_write(sout,strlen(sout));
+	ltoa(count,sout,16);
+	uart_write(" ?= ", 4);
+	uart_write(sout,strlen(sout));
 	uart_write("\n",1);
 #endif
 	/* This timer expires at roughly one second after startup */
@@ -534,7 +537,17 @@ main(void)
 #endif
     PORTB |= (1<<PB0);
     while(1) { 
-
+		if(crcgood == 0) {
+			/* Send a node alarm message indicating a firmware failure */
+			frame.id = node_id;
+			frame.length = 4;
+			frame.data[0] = 0x00; /* Alarm type LSB */
+			frame.data[1] = 0x00; /* Alarm type MSB */
+			frame.data[2] = (uint8_t)(pgm_crc & 0x00FF); /* Send current checksum */
+			frame.data[3] = (uint8_t)(pgm_crc >> 8);
+			can_send(0, 3, frame);
+		}
+		crcgood++;
         bload_check();
         _delay_loop_2(0xFFFF); /* Delay */
 	}	
