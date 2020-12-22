@@ -139,18 +139,6 @@ init(void)
  /* Initialize the MCP2515 */
 	can_init(cnf1, cnf2, cnf3, 0x00);
 
- /* Set the masks and filters to listen for Node Specific Messages
-    on RX 0.  We put the node specific messages in RX0 and the
-    two way communication channels in RX1 */
-	can_mode(CAN_MODE_CONFIG, 0);
-    can_mask(0, 0x06E0);
- /* This sets the filter to get a firmware update command to our
-    node address.  For the bootloader this is all we care about. */
-    can_filter(CAN_RXF0SIDH, 0x06E0);
-    can_mask(1, 0x0700);
-    can_filter(CAN_RXF2SIDH, 0x0700);
-    can_mode(CAN_MODE_NORMAL, 0);
-
 #ifdef UART_DEBUG
 	init_serial();
 #endif
@@ -169,7 +157,6 @@ void
 store_crc(uint16_t crc, uint16_t length)
 {    
     uint16_t n, i=0;
-    
     /* Run through the page and store the information that is already there
        in the temporary buffer. */
     for(n=PGM_LAST_PAGE_START; n<(PGM_LAST_PAGE_START + PGM_PAGE_SIZE-4); n+=2) {
@@ -190,6 +177,7 @@ store_crc(uint16_t crc, uint32_t length)
 {   
     uint16_t i=0;
     uint32_t n;
+
     /* Run through the page and store the information that is already there
        in the temporary buffer. */
     for(n=PGM_LAST_PAGE_START; n<(PGM_LAST_PAGE_START + PGM_PAGE_SIZE-6); n+=2) {
@@ -197,19 +185,17 @@ store_crc(uint16_t crc, uint32_t length)
         boot_page_fill_safe(n, i);
     }
     /* Add the length and crc to the buffer and write it out. */
-    boot_page_fill_safe(PGM_LENGTH, (uint16_t)(length & 0x0000FFFF));
-	boot_page_fill_safe(PGM_LENGTH+2, (uint16_t)(length >> 16));
+    boot_page_fill_safe(PGM_LENGTH_LSB, (uint16_t)(length & 0x0000FFFF));
+    boot_page_fill_safe(PGM_LENGTH_MSB, (uint16_t)(length >> 16));
     boot_page_fill_safe(PGM_CRC, crc);
     boot_page_erase_safe(PGM_LAST_PAGE_START);
-    //boot_spm_busy_wait(); 	
     boot_page_write_safe(PGM_LAST_PAGE_START);
-    //boot_spm_busy_wait(); 
 }
 #endif
 
-/* This function polls the MCP2515 for a CAN frame in RX1 and reads
-   the frame.  If it reads a frame from our 2-way channel it returns
-   0.  If it's some other data a 1 and if a timeout a 2 */
+/* This function polls the MCP2515 for a CAN frame that represents
+   the given channel.  It checks Rx 1 first and then Rx 0.  Rx 1 first
+   because it would be the older frame since we are using rollover */
 static inline uint8_t
 read_channel(uint8_t channel, struct CanFrame *frame)
 {
@@ -219,15 +205,19 @@ read_channel(uint8_t channel, struct CanFrame *frame)
     while(counter++ < 0x40FF) { /* roughly 1 second or so */
         result = can_poll_int();
 
-        /* All of our two-way channel data is in RX1 */
+        /* Read Frame from Buffer 1 */
         if(result & (1<<CAN_RX1IF)) {
-            /* Read Frame from Buffer */
             can_read(1, frame);
             /* Check that it's one of ours */
             if(frame->id == FIX_2WAY_CHANNEL + channel *2)
                 return 0;
-            else
-                return 1;
+		}
+		/* Read frame from buffer 0 */
+        if(result & (1<<CAN_RX0IF)) {
+            can_read(0, frame);
+            /* Check that it's one of ours */
+            if(frame->id == FIX_2WAY_CHANNEL + channel *2)
+                return 0;
         }
     }
     return 2; /* Timeout */
@@ -252,7 +242,10 @@ load_firmware(uint8_t channel)
 #ifdef UART_DEBUG
     char sout[5];
 
-	uart_write("Load Firmware\n", 14);
+	uart_write("Load Firmware ", 14);
+	itoa(channel, sout, 10);
+    uart_write(sout, strlen(sout));
+	uart_write("\n", 1);
 #endif
     while(1) {
         result = read_channel(channel, &frame);
@@ -298,7 +291,7 @@ load_firmware(uint8_t channel)
 					address = 0xFFFFFFFF; /* So we don't try to read data */
                 } else if(frame.data[0] == 0x05) { /* Complete */
 				    crc = *(uint16_t *)(&frame.data[1]);
-                    temp = *(uint16_t *)(&frame.data[3]); /* Size */
+                    temp = *(uint32_t *)(&frame.data[3]); /* Size */
                     frame.id++; /* Add one for the response channel */
 					can_send(0, 3, frame); /* Send Response */
 					store_crc(crc, temp);
@@ -347,7 +340,6 @@ load_firmware(uint8_t channel)
 #endif
 			}
         }
-
     }
 }
 
@@ -376,6 +368,32 @@ print_frame(struct CanFrame frame)
 #endif
 }
 
+/* This function checks each Rx buffer in the MCP2515 starting with
+   buffer 1 since that will have the older frame in it.  If that has
+   a node specific message in it then we return 1.  Else try Rx buffer
+   0 and do the same.  If there are no node specific messages in either
+   buffer then return 0 */
+uint8_t
+get_ns_frame(struct CanFrame *frame) {
+	uint8_t result;
+	
+    result = can_poll_int();
+
+ /* We're going to look in both buffers starting with 1 since that would
+    be where the oldest of the two would be. */
+    if(result & (1<<CAN_RX1IF)) {
+        can_read(1, frame);
+		if(frame->id >= FIX_NODE_SPECIFIC && frame->id < (FIX_NODE_SPECIFIC+256)) {
+			return 1;
+		}
+	} else if(result & (1<<CAN_RX0IF)) {
+		can_read(0, frame);
+		if(frame->id >= FIX_NODE_SPECIFIC && frame->id < (FIX_NODE_SPECIFIC+256)) {
+			return 1;
+		}
+	}
+	return 0;
+}
 
 /* This is the function that we call periodically during the one
    second startup time to see if we have a bootloader request on
@@ -385,12 +403,8 @@ bload_check(void) {
     struct CanFrame frame;
     uint8_t result, channel, send_node;
     
-    result = can_poll_int();
-
-    if(result & (1<<CAN_RX0IF)) {
-     /* If the filters and masks are okay this should be
-        a firmware update command addressed to us. */
-        can_read(0, &frame);
+    result = get_ns_frame(&frame);
+	if(result) { /* If this is true then a node specific message is in &frame */
 		print_frame(frame); /* Debugging Stuff */
         if(frame.data[1] == node_id && frame.data[0] == FIX_FIRMWARE &&
            frame.data[2] == BL_VERIFY_LSB && frame.data[3] == BL_VERIFY_MSB) {
@@ -475,7 +489,7 @@ int
 main(void)
 {
 	struct CanFrame frame;
-    uint16_t pgm_crc, cmp_crc;
+    uint16_t pgm_crc, cmp_crc, timer=0;
 	uint8_t crcgood=0;
 	
 #if PGM_LENGTH_BITS == 16
@@ -514,7 +528,7 @@ main(void)
     itoa(pgm_crc,sout,16);
 	uart_write("Checksum ", 9);
 	uart_write(sout,strlen(sout));
-	ltoa(count,sout,16);
+	itoa(cmp_crc,sout,16);
 	uart_write(" ?= ", 4);
 	uart_write(sout,strlen(sout));
 	uart_write("\n",1);
@@ -537,7 +551,7 @@ main(void)
 #endif
     PORTB |= (1<<PB0);
     while(1) { 
-		if(crcgood == 0) {
+		if(timer == 0) {
 			/* Send a node alarm message indicating a firmware failure */
 			frame.id = node_id;
 			frame.length = 4;
@@ -547,9 +561,8 @@ main(void)
 			frame.data[3] = (uint8_t)(pgm_crc >> 8);
 			can_send(0, 3, frame);
 		}
-		crcgood++;
+		timer++;
         bload_check();
-        _delay_loop_2(0xFFFF); /* Delay */
 	}	
 }
 

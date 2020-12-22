@@ -43,8 +43,10 @@
   #define PGM_PAGE_SIZE 256 /* Page size in Bytes */
   #define PGM_LAST_PAGE_START 0x3EF00 /* Starting address of the last page of flash */
   #define PGM_LENGTH_BITS 32          /* Changes how we read and write to flash */
-  #define PGM_LENGTH (const uint32_t *)0x3EFFA /* The address where the program size is located */
-  #define PGM_CRC    (const uint16_t *)0x3EFFE /* The address where the programs checksum is located */
+  #define PGM_LENGTH     (const uint32_t *)0x3EFFA /* The address where the program size is located */
+  #define PGM_LENGTH_LSB (const uint32_t *)0x3EFFA /* The address where the program size is located */
+  #define PGM_LENGTH_MSB (const uint32_t *)0x3EFFC /* The address where the program size is located */
+  #define PGM_CRC        (const uint16_t *)0x3EFFE /* The address where the programs checksum is located */
 #endif
 
 #endif

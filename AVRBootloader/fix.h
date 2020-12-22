@@ -20,7 +20,7 @@
 #define _CANFIX_H
 
 /* Identifier Groups */
-#define FIX_2WAY_CHANNEL  0x700
+#define FIX_2WAY_CHANNEL  0x7E0
 #define FIX_NODE_SPECIFIC 0x6E0
 
 /* Node Specific Message Command Codes */

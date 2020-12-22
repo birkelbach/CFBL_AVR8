@@ -99,9 +99,11 @@
 #define CAN_TXB0D0 0x36 
 
 #define CAN_RXB0CTRL 0x60
+#define CAN_RXB1CTRL 0x70
 	#define CAN_RXM1 6
 	#define CAN_RXM0 5
 	#define CAN_RXRTR 3
+	#define CAN_BUKT 2
 	// Bits 2:0 FILHIT2:0
 #define CAN_RXB0SIDH 0x61
 #define CAN_RXB0SIDL 0x62

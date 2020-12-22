@@ -53,8 +53,12 @@ can_init(uint8_t cnf1, uint8_t cnf2, uint8_t cnf3, uint8_t iflags)
 
     wb[1]=CAN_RXB0CTRL;
 	wb[2]=0x20; /* Set to Rx Standard Frames only - RXB0CTRL */
-	wb[3]=0x20; /* Set to Rx Standard Frames only - RXB1CTRL */
-	spi_write(wb,rb,4);
+	spi_write(wb,rb,3);
+
+    /* Set to Rx Standard Frames only and rollover- RXB1CTRL */
+    wb[1]=CAN_RXB1CTRL;
+    wb[2]=(0x01 << CAN_RXM0) || (0x01 << CAN_BUKT);
+    spi_write(wb,rb,3);
 
     /* Put the chip in Normal Mode */
     can_mode(CAN_MODE_NORMAL, 0);
@@ -83,7 +87,7 @@ can_read(uint8_t rxbuff, struct CanFrame *frame)
 {
     uint8_t wb[15];
     uint8_t rb[15];
-    uint8_t mask;  /* This is for the bit modify to restet the interrupt flag */
+    uint8_t mask;  /* This is for the bit modify to reset the interrupt flag */
     
     wb[0]=CAN_READ;
     if(rxbuff==0) {
